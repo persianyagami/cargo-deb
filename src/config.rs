@@ -10,8 +10,12 @@ pub struct CargoConfig {
 }
 
 impl CargoConfig {
-    #[allow(deprecated)]
     pub fn new<P: AsRef<Path>>(project_path: P) -> CDResult<Option<Self>> {
+        Self::new_(project_path.as_ref())
+    }
+
+    #[allow(deprecated)]
+    fn new_(project_path: &Path) -> CDResult<Option<Self>> {
         let mut project_path = project_path.as_ref();
         loop {
             if let Some(conf) = Self::try_parse(project_path)? {
@@ -28,16 +32,19 @@ impl CargoConfig {
                 return Ok(Some(conf));
             }
         }
-        if let Some(conf) = Self::try_parse("/etc")? {
+        if let Some(conf) = Self::try_parse(Path::new("/etc"))? {
             return Ok(Some(conf));
         }
         Ok(None)
     }
 
-    fn try_parse<P: AsRef<Path>>(path: P) -> CDResult<Option<Self>> {
-        let path = path.as_ref().join(".cargo/config");
+    fn try_parse(dir_path: &Path) -> CDResult<Option<Self>> {
+        let mut path = dir_path.join(".cargo/config.toml");
         if !path.exists() {
-            return Ok(None);
+            path = dir_path.join(".cargo/config");
+            if !path.exists() {
+                return Ok(None);
+            }
         }
         Ok(Some(Self::from_str(&fs::read_to_string(&path)?, path)?))
     }

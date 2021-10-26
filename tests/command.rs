@@ -18,7 +18,7 @@ fn run_cargo_deb_command_on_example_dir() {
     }
 
     // prints deb path on the last line
-    let last_line = output.stdout[..output.stdout.len()-1].split(|&c| c==b'\n').last().unwrap();
+    let last_line = output.stdout[..output.stdout.len() - 1].split(|&c| c == b'\n').last().unwrap();
     let deb_path = Path::new(::std::str::from_utf8(last_line).unwrap());
     assert!(deb_path.exists());
 
@@ -32,13 +32,13 @@ fn run_cargo_deb_command_on_example_dir() {
 
     assert_eq!("2.0\n", fs::read_to_string(ardir.path().join("debian-binary")).unwrap());
     assert!(ardir.path().join("data.tar.xz").exists());
-    assert!(ardir.path().join("control.tar.gz").exists());
+    assert!(ardir.path().join("control.tar.xz").exists());
 
     let cdir = TempDir::new("cargo-control-test").unwrap();
     assert!(Command::new("tar")
-        .arg("xzf")
+        .arg("xf")
         .current_dir(cdir.path())
-        .arg(ardir.path().join("control.tar.gz"))
+        .arg(ardir.path().join("control.tar.xz"))
         .status().unwrap().success());
 
     let control = fs::read_to_string(cdir.path().join("control")).unwrap();
@@ -54,7 +54,7 @@ fn run_cargo_deb_command_on_example_dir() {
     assert!(md5sums.contains("b1946ac92492d2347c6235b4d2611184  var/lib/example/1.txt\n"));
     assert!(md5sums.contains("591785b794601e212b260e25925636fd  var/lib/example/2.txt\n"));
     assert!(md5sums.contains("1537684900f6b12358c88a612adf1049  var/lib/example/3.txt\n"));
-    assert!(md5sums.contains("4176f128e63dbe2f7ba37490bd0368db  usr/share/doc/example/copyright\n"));
+    assert!(md5sums.contains("6f65f1e8907ea8a25171915b3bba45af  usr/share/doc/example/copyright\n"));
 
     let ddir = TempDir::new("cargo-data-test").unwrap();
     assert!(Command::new("tar")
@@ -115,13 +115,13 @@ fn run_cargo_deb_command_on_example_dir_with_variant() {
 
     assert_eq!("2.0\n", fs::read_to_string(ardir.path().join("debian-binary")).unwrap());
     assert!(ardir.path().join("data.tar.xz").exists());
-    assert!(ardir.path().join("control.tar.gz").exists());
+    assert!(ardir.path().join("control.tar.xz").exists());
 
     let cdir = TempDir::new("cargo-control-test").unwrap();
     assert!(Command::new("tar")
-        .arg("xzf")
+        .arg("xJf")
         .current_dir(cdir.path())
-        .arg(ardir.path().join("control.tar.gz"))
+        .arg(ardir.path().join("control.tar.xz"))
         .status().unwrap().success());
 
     let control = fs::read_to_string(cdir.path().join("control")).unwrap();
@@ -137,7 +137,7 @@ fn run_cargo_deb_command_on_example_dir_with_variant() {
     assert!(md5sums.contains("b1946ac92492d2347c6235b4d2611184  var/lib/example/1.txt\n"));
     assert!(md5sums.contains("591785b794601e212b260e25925636fd  var/lib/example/2.txt\n"));
     assert!(md5sums.contains("835a3c46f2330925774ebf780aa74241  var/lib/example/4.txt\n"));
-    assert!(md5sums.contains("f4b165c5ea1f9ec1b87abd72845627fd  usr/share/doc/example-debug/copyright\n"));
+    assert!(md5sums.contains("2455967cef930e647146a8c762199ed3  usr/share/doc/example-debug/copyright\n"));
 
     let ddir = TempDir::new("cargo-data-test").unwrap();
     assert!(Command::new("tar")
@@ -174,7 +174,7 @@ fn run_cargo_deb_command_on_example_dir_with_version() {
     assert!(output.status.success());
 
     // prints deb path on the last line
-    let last_line = output.stdout[..output.stdout.len()-1].split(|&c| c==b'\n').last().unwrap();
+    let last_line = output.stdout[..output.stdout.len() - 1].split(|&c| c == b'\n').last().unwrap();
     let deb_path = Path::new(::std::str::from_utf8(last_line).unwrap());
     assert!(deb_path.exists());
 
@@ -188,13 +188,13 @@ fn run_cargo_deb_command_on_example_dir_with_version() {
 
     assert_eq!("2.0\n", fs::read_to_string(ardir.path().join("debian-binary")).unwrap());
     assert!(ardir.path().join("data.tar.xz").exists());
-    assert!(ardir.path().join("control.tar.gz").exists());
+    assert!(ardir.path().join("control.tar.xz").exists());
 
     let cdir = TempDir::new("cargo-control-test").unwrap();
     assert!(Command::new("tar")
-        .arg("xzf")
+        .arg("xf")
         .current_dir(cdir.path())
-        .arg(ardir.path().join("control.tar.gz"))
+        .arg(ardir.path().join("control.tar.xz"))
         .status().unwrap().success());
 
     let control = fs::read_to_string(cdir.path().join("control")).unwrap();
@@ -210,7 +210,7 @@ fn run_cargo_deb_command_on_example_dir_with_version() {
     assert!(md5sums.contains("b1946ac92492d2347c6235b4d2611184  var/lib/example/1.txt\n"));
     assert!(md5sums.contains("591785b794601e212b260e25925636fd  var/lib/example/2.txt\n"));
     assert!(md5sums.contains("1537684900f6b12358c88a612adf1049  var/lib/example/3.txt\n"));
-    assert!(md5sums.contains("4176f128e63dbe2f7ba37490bd0368db  usr/share/doc/example/copyright\n"));
+    assert!(md5sums.contains("6f65f1e8907ea8a25171915b3bba45af  usr/share/doc/example/copyright\n"), "has:\n{}", md5sums);
 
     let ddir = TempDir::new("cargo-data-test").unwrap();
     assert!(Command::new("tar")

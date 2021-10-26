@@ -88,7 +88,12 @@ fn generate_scripts(archive: &mut Archive, option: &Config, listener: &mut dyn L
             }
 
             if let Some(contents) = script {
-                archive.file(name, &contents, 0o755)?;
+                // The config, postinst, postrm, preinst, and prerm
+                // control files should use mode 0755; all other control files should use 0644.
+                // See Debian Policy Manual section 10.9
+                // and lintian tag control-file-has-bad-permissions
+                let permissions = if *name == "templates" { 0o644 } else { 0o755 };
+                archive.file(name, &contents, permissions)?;
             }
         }
     }
@@ -140,20 +145,50 @@ fn generate_control(archive: &mut Archive, options: &Config, listener: &mut dyn 
         writeln!(&mut control, "Section: {}", section)?;
     }
     writeln!(&mut control, "Priority: {}", options.priority)?;
-    control.write_all(b"Standards-Version: 3.9.4\n")?;
     writeln!(&mut control, "Maintainer: {}", options.maintainer)?;
 
     let installed_size = options.assets.resolved
         .iter()
-        .filter_map(|m| m.source.len())
-        .sum::<u64>() / 1024;
+        .map(|m| (m.source.len().unwrap_or(0)+2047)/1024) // assume 1KB of fs overhead per file
+        .sum::<u64>();
 
     writeln!(&mut control, "Installed-Size: {}", installed_size)?;
 
-    writeln!(&mut control, "Depends: {}", options.get_dependencies(listener)?)?;
+    let deps = options.get_dependencies(listener)?;
+    if !deps.is_empty() {
+        writeln!(&mut control, "Depends: {}", deps)?;
+    }
 
-    if let Some(ref build_depends) = options.build_depends {
-        writeln!(&mut control, "Build-Depends: {}", build_depends)?;
+    if let Some(ref pre_depends) = options.pre_depends {
+        let pre_depends_normalized = pre_depends.trim();
+
+        if !pre_depends_normalized.is_empty() {
+            writeln!(&mut control, "Pre-Depends: {}", pre_depends_normalized)?;
+        }
+    }
+
+    if let Some(ref recommends) = options.recommends {
+        let recommends_normalized = recommends.trim();
+
+        if !recommends_normalized.is_empty() {
+            writeln!(&mut control, "Recommends: {}", recommends_normalized)?;
+        }
+    }
+
+    if let Some(ref suggests) = options.suggests {
+        let suggests_normalized = suggests.trim();
+
+        if !suggests_normalized.is_empty() {
+            writeln!(&mut control, "Suggests: {}", suggests_normalized)?;
+        }
+    }
+
+    if let Some(ref enhances) = options.enhances {
+        let enhances_normalized = enhances.trim();
+
+        if !enhances_normalized.is_empty() {
+            writeln!(&mut control, "Enhances: {}", enhances_normalized)?;
+        }
     }
 
     if let Some(ref conflicts) = options.conflicts {
@@ -195,7 +230,7 @@ fn generate_conf_files(archive: &mut Archive, files: &str) -> CDResult<()> {
     Ok(())
 }
 
-fn generate_triggers_file<P: AsRef<Path>>(archive: &mut Archive, path: P) -> CDResult<()> {
+fn generate_triggers_file(archive: &mut Archive, path: &Path) -> CDResult<()> {
     if let Ok(content) = fs::read(path) {
         archive.file("./triggers", &content, 0o644)?;
     }
@@ -234,15 +269,7 @@ mod tests {
         let mut mock_listener = crate::listener::MockListener::new();
         mock_listener.expect_info().return_const(());
 
-        let config = Config::from_manifest(
-            Path::new("Cargo.toml"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            &mut mock_listener,
-        ).unwrap();
+        let config = Config::from_manifest(Path::new("Cargo.toml"), None, None, None, None, None, &mut mock_listener).unwrap();
 
         let ar = Archive::new(0);
 

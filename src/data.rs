@@ -4,6 +4,7 @@ use crate::manifest::{Asset, Config};
 use crate::tararchive::Archive;
 use md5::Digest;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,20 +35,29 @@ pub(crate) fn generate_changelog_asset(options: &Config) -> CDResult<Option<Vec<
     }
 }
 
+fn append_copyright_metadata(copyright: &mut Vec<u8>, options: &Config) -> Result<(), CargoDebError> {
+    writeln!(copyright, "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/")?;
+    writeln!(copyright, "Upstream-Name: {}", options.name)?;
+    if let Some(source) = options.repository.as_ref().or(options.homepage.as_ref()) {
+        writeln!(copyright, "Source: {}", source)?;
+    }
+    writeln!(copyright, "Copyright: {}", options.copyright)?;
+    if let Some(ref license) = options.license {
+        writeln!(copyright, "License: {}", license)?;
+    }
+    Ok(())
+}
+
 /// Generates the copyright file from the license file and adds that to the tar archive.
 pub(crate) fn generate_copyright_asset(options: &Config) -> CDResult<Vec<u8>> {
     let mut copyright: Vec<u8> = Vec::new();
-    writeln!(&mut copyright, "Upstream Name: {}", options.name)?;
-    if let Some(source) = options.repository.as_ref().or(options.homepage.as_ref()) {
-        writeln!(&mut copyright, "Source: {}", source)?;
-    }
-    writeln!(&mut copyright, "Copyright: {}", options.copyright)?;
-    if let Some(ref license) = options.license {
-        writeln!(&mut copyright, "License: {}", license)?;
-    }
     if let Some(ref path) = options.license_file {
         let license_string = fs::read_to_string(options.path_in_workspace(path))
             .map_err(|e| CargoDebError::IoFile("unable to read license file", e, path.to_owned()))?;
+        if !has_copyright_metadata(&license_string) {
+            append_copyright_metadata(&mut copyright, options)?;
+        }
+
         // Skip the first `A` number of lines and then iterate each line after that.
         for line in license_string.lines().skip(options.license_file_skip_lines) {
             // If the line is a space, add a dot, else write the line.
@@ -58,27 +68,40 @@ pub(crate) fn generate_copyright_asset(options: &Config) -> CDResult<Vec<u8>> {
                 copyright.write_all(b"\n")?;
             }
         }
+    } else {
+        append_copyright_metadata(&mut copyright, options)?;
     }
 
     // Write a copy to the disk for the sake of obtaining a md5sum for the control archive.
     Ok(copyright)
 }
 
-/// Compress man page assets per Debian Policy.
+fn has_copyright_metadata(file: &str) -> bool {
+    file.lines().take(10)
+        .any(|l| l.starts_with("License: ") || l.starts_with("Source: ") || l.starts_with("Upstream-Name: ") || l.starts_with("Format: "))
+}
+
+/// Compress man pages and other assets per Debian Policy.
 ///
 /// # References
 ///
-/// https://www.debian.org/doc/debian-policy/ch-docs.html#manual-pages
+/// https://www.debian.org/doc/debian-policy/ch-docs.html
 /// https://lintian.debian.org/tags/manpage-not-compressed.html
-pub fn compress_man_pages(options: &mut Config, listener: &dyn Listener) -> CDResult<()> {
+pub fn compress_assets(options: &mut Config, listener: &dyn Listener) -> CDResult<()> {
     let mut indices_to_remove = Vec::new();
     let mut new_assets = Vec::new();
 
+    fn needs_compression(path: &str) -> bool {
+        !path.ends_with(".gz")
+            && (path.starts_with("usr/share/man/")
+                || (path.starts_with("usr/share/doc/")
+                    && (path.ends_with("/NEWS") || path.ends_with("/changelog")))
+                || (path.starts_with("usr/share/info/") && path.ends_with(".info")))
+    }
+
     for (idx, asset) in options.assets.resolved.iter().enumerate() {
         let target_path_str = asset.target_path.to_string_lossy();
-        if target_path_str.starts_with("usr/share/man/") &&
-           !target_path_str.ends_with(".gz")
-        {
+        if needs_compression(&target_path_str) {
             listener.info(format!("Compressing '{}'", asset.source.path().unwrap_or(Path::new("-")).display()));
 
             let content = asset.source.data()?;
@@ -113,7 +136,16 @@ fn archive_files(archive: &mut Archive, options: &Config, listener: &mut dyn Lis
     for asset in &options.assets.resolved {
         let out_data = asset.source.data()?;
 
-        listener.info(format!("{} -> {}", asset.source.path().unwrap_or_else(|| Path::new("-")).display(), asset.target_path.display()));
+        let mut log_line = format!(
+            "{} -> {}",
+            asset.source.path().unwrap_or_else(|| Path::new("-")).display(),
+            asset.target_path.display()
+        );
+        if let Some(len) = asset.source.len() {
+            let (size, unit) = human_size(len);
+            let _ = fmt::Write::write_fmt(&mut log_line, format_args!(" ({}{})", size, unit));
+        }
+        listener.info(log_line);
 
         let mut archived = false;
         if options.preserve_symlinks {
@@ -133,4 +165,14 @@ fn archive_files(archive: &mut Archive, options: &Config, listener: &mut dyn Lis
         }
     }
     Ok(hashes)
+}
+
+fn human_size(len: u64) -> (u64, &'static str) {
+    if len < 1000 {
+        return (len, "B");
+    }
+    if len < 1000_000 {
+        return ((len + 999) / 1000, "KB");
+    }
+    return ((len + 999_999) / 1000_000, "MB");
 }

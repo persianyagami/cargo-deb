@@ -300,8 +300,14 @@ pub struct Config {
     pub maintainer: String,
     /// The Debian dependencies required to run the project.
     pub depends: String,
-    /// The Debian dependencies required to build the project.
-    pub build_depends: Option<String>,
+    /// The Debian pre-dependencies.
+    pub pre_depends: Option<String>,
+    /// The Debian recommended dependencies.
+    pub recommends: Option<String>,
+    /// The Debian suggested dependencies.
+    pub suggests: Option<String>,
+    /// The list of packages this package can enhance.
+    pub enhances: Option<String>,
     /// The Debian software category to which the package belongs.
     pub section: Option<String>,
     /// The Debian priority of the project. Typically 'optional'.
@@ -388,7 +394,7 @@ impl Config {
                 let bin = self.all_binaries();
                 let resolved = bin.par_iter()
                     .filter_map(|p| p.path())
-                    .filter_map(|bname| match resolve(bname, &self.architecture, listener) {
+                    .filter_map(|bname| match resolve(bname) {
                         Ok(bindeps) => Some(bindeps),
                         Err(err) => {
                             listener.warning(format!("{} (no auto deps for {})", err, bname.display()));
@@ -423,11 +429,7 @@ impl Config {
                 // Remove dirs from globs without throwing away errors
                 .map(|entry| {
                     let source_file = entry?;
-                    Ok(if source_file.is_dir() {
-                        None
-                    } else {
-                        Some(source_file)
-                    })
+                    Ok(if source_file.is_dir() { None } else { Some(source_file) })
                 })
                 .filter_map(|res| match res {
                     Ok(None) => None,
@@ -704,7 +706,10 @@ impl Cargo {
                     .ok_or("The package must have a maintainer or authors property")?.to_owned())
             })?,
             depends: deb.depends.take().unwrap_or_else(|| "$auto".to_owned()),
-            build_depends: deb.build_depends.take(),
+            pre_depends: deb.pre_depends.take(),
+            recommends: deb.recommends.take(),
+            suggests: deb.suggests.take(),
+            enhances: deb.enhances.take(),
             conflicts: deb.conflicts.take(),
             breaks: deb.breaks.take(),
             replaces: deb.replaces.take(),
@@ -712,7 +717,7 @@ impl Cargo {
             section: deb.section.take(),
             priority: deb.priority.take().unwrap_or_else(|| "optional".to_owned()),
             architecture: get_arch(target.unwrap_or(crate::DEFAULT_TARGET)).to_owned(),
-            conf_files: deb.conf_files.map(|x| x.iter().fold(String::new(), |a, b| a + b + "\n")),
+            conf_files: deb.conf_files.map(|x| format_conffiles(&x)),
             assets: Assets::new(),
             triggers_file: deb.triggers_file.map(PathBuf::from),
             changelog: deb.changelog.take(),
@@ -776,17 +781,23 @@ impl Cargo {
         })
     }
 
-    fn license_file(&mut self, license_file: Option<&Vec<String>>) -> CDResult<(Option<PathBuf>, usize)> {
-        if let Some(args) = license_file {
-            let mut args = args.iter();
-            let file = args.next();
-            let lines = if let Some(lines) = args.next() {
-                lines.parse().map_err(|e| CargoDebError::NumParse("invalid number of lines", e))?
-            } else {0};
-            Ok((file.map(|s|s.into()), lines))
-        } else {
-            Ok((self.package.license_file.as_ref().map(|s| s.into()), 0))
-        }
+    fn license_file(&mut self, license_file: Option<&LicenseFile>) -> CDResult<(Option<PathBuf>, usize)> {
+        Ok(match license_file {
+            Some(LicenseFile::Vec(args)) => {
+                let mut args = args.iter();
+                let file = args.next();
+                let lines = if let Some(lines) = args.next() {
+                    lines.parse().map_err(|e| CargoDebError::NumParse("invalid number of lines", e))?
+                } else {0};
+                (file.map(|s|s.into()), lines)
+            },
+            Some(LicenseFile::String(s)) => {
+                (Some(s.into()), 0)
+            }
+            None => {
+                (self.package.license_file.as_ref().map(|s| s.into()), 0)
+            }
+        })
     }
 
     fn take_assets(&self, options: &Config, assets: Option<Vec<Vec<String>>>, targets: &[CargoMetadataTarget], readme: Option<&String>) -> CDResult<Assets> {
@@ -883,16 +894,26 @@ struct CargoPackageMetadata {
     pub deb: Option<CargoDeb>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum LicenseFile {
+    String(String),
+    Vec(Vec<String>),
+}
+
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct CargoDeb {
     pub name: Option<String>,
     pub maintainer: Option<String>,
     pub copyright: Option<String>,
-    pub license_file: Option<Vec<String>>,
+    pub license_file: Option<LicenseFile>,
     pub changelog: Option<String>,
     pub depends: Option<String>,
-    pub build_depends: Option<String>,
+    pub pre_depends: Option<String>,
+    pub recommends: Option<String>,
+    pub suggests: Option<String>,
+    pub enhances: Option<String>,
     pub conflicts: Option<String>,
     pub breaks: Option<String>,
     pub replaces: Option<String>,
@@ -923,7 +944,10 @@ impl CargoDeb {
             license_file: self.license_file.or(parent.license_file),
             changelog: self.changelog.or(parent.changelog),
             depends: self.depends.or(parent.depends),
-            build_depends: self.build_depends.or(parent.build_depends),
+            pre_depends: self.pre_depends.or(parent.pre_depends),
+            recommends: self.recommends.or(parent.recommends),
+            suggests: self.suggests.or(parent.suggests),
+            enhances: self.enhances.or(parent.enhances),
             conflicts: self.conflicts.or(parent.conflicts),
             breaks: self.breaks.or(parent.breaks),
             replaces: self.replaces.or(parent.replaces),
@@ -1023,6 +1047,23 @@ pub(crate) fn get_arch(target: &str) -> &str {
         (arm, _) if arm.starts_with("arm") => "armel",
         (other_arch, _) => other_arch,
     }
+}
+
+/// Format conffiles section, ensuring each path has a leading slash
+///
+/// Starting with [dpkg 1.20.1](https://github.com/guillemj/dpkg/blob/68ab722604217d3ab836276acfc0ae1260b28f5f/debian/changelog#L393),
+/// which is what Ubuntu 21.04 uses, relative conf-files are no longer
+/// accepted (the deb-conffiles man page states that "they should be listed as
+/// absolute pathnames"). So we prepend a leading slash to the given strings
+/// as needed
+fn format_conffiles<S: AsRef<str>>(files: &[S]) -> String {
+    files.iter().fold(String::new(), |mut acc, x| {
+        let pth = x.as_ref();
+        if !pth.starts_with('/') {
+            acc.push('/');
+        }
+        acc + pth + "\n"
+    })
 }
 
 #[cfg(test)]
@@ -1153,15 +1194,7 @@ mod tests {
         // supply a systemd unit file as if it were available on disk
         add_test_fs_paths(&vec![to_canon_static_str("cargo-deb.service")]);
 
-        let config = Config::from_manifest(
-            Path::new("Cargo.toml"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            &mut mock_listener,
-        ).unwrap();
+        let config = Config::from_manifest(Path::new("Cargo.toml"), None, None, None, None, None, &mut mock_listener).unwrap();
 
         let num_unit_assets = config.assets.resolved
             .iter()
@@ -1179,15 +1212,7 @@ mod tests {
         // supply a systemd unit file as if it were available on disk
         add_test_fs_paths(&vec![to_canon_static_str("cargo-deb.service")]);
 
-        let mut config = Config::from_manifest(
-            Path::new("Cargo.toml"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            &mut mock_listener,
-        ).unwrap();
+        let mut config = Config::from_manifest(Path::new("Cargo.toml"), None, None, None, None, None, &mut mock_listener).unwrap();
 
         config.systemd_units.get_or_insert(SystemdUnitsConfig::default());
         config.maintainer_scripts.get_or_insert(PathBuf::new());
@@ -1200,6 +1225,28 @@ mod tests {
             .count();
 
         assert_eq!(1, num_unit_assets);
+    }
+
+    #[test]
+    fn format_conffiles_empty() {
+        let actual = format_conffiles::<String>(&[]);
+        assert_eq!("", actual);
+    }
+
+    #[test]
+    fn format_conffiles_one() {
+        let actual = format_conffiles(&["/etc/my-pkg/conf.toml"]);
+        assert_eq!("/etc/my-pkg/conf.toml\n", actual);
+    }
+
+    #[test]
+    fn format_conffiles_multiple() {
+        let actual = format_conffiles(&[
+            "/etc/my-pkg/conf.toml",
+            "etc/my-pkg/conf2.toml"
+        ]);
+
+        assert_eq!("/etc/my-pkg/conf.toml\n/etc/my-pkg/conf2.toml\n", actual);
     }
 }
 
@@ -1229,6 +1276,8 @@ fn deb_ver() {
             documentation: None,
             description: Default::default(),
             build: None,
+            default_run: None,
+            resolver: None,
         },
         profile: None,
     };
